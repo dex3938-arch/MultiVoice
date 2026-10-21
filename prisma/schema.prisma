@@ -1,0 +1,264 @@
+// MultiVoice Calling Agent — CRM data. Postgres on Supabase.
+// DATABASE_URL = transaction pooler (6543, ?pgbouncer=true), DIRECT_URL = session pooler (5432) for migrations.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  MANAGER
+  AGENT
+  VIEWER
+}
+
+enum ContactStatus {
+  NEW
+  CONTACTED
+  INTERESTED
+  APPOINTMENT
+  WON
+  LOST
+  DNC
+}
+
+enum Direction {
+  INBOUND
+  OUTBOUND
+  WEB
+}
+
+enum Outcome {
+  APPOINTMENT_BOOKED
+  CALLBACK
+  INTERESTED
+  NOT_INTERESTED
+  FOLLOW_UP
+  TRANSFERRED
+  DNC
+  COMPLETED
+  NO_ANSWER
+  BUSY
+  VOICEMAIL
+  FAILED
+}
+
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+}
+
+enum AppointmentStatus {
+  BOOKED
+  DONE
+  CANCELLED
+}
+
+enum DocStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+model User {
+  id             Int       @id @default(autoincrement())
+  email          String    @unique @db.VarChar(160)
+  name           String    @db.VarChar(120)
+  passwordHash   String    @db.VarChar(100)
+  role           Role      @default(AGENT)
+  active         Boolean   @default(true)
+  lastLoginAt    DateTime?
+  /// Two-factor sign-in: encrypted TOTP secret, hashed recovery codes, last used step (no replay).
+  mfaSecret      String?   @db.Text
+  mfaEnabledAt   DateTime?
+  mfaRecovery    Json?
+  mfaLastStep    Int?
+  /// Bumped on password change / MFA reset / deactivation: old sessions stop working.
+  sessionVersion Int       @default(0)
+  createdAt      DateTime  @default(now())
+  audits         AuditLog[]
+  contacts       Contact[]
+  tasks          Task[]
+  documents      KnowledgeDocument[]
+}
+
+model AuditLog {
+  id       Int      @id @default(autoincrement())
+  userId   Int?
+  user     User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action   String   @db.VarChar(60)
+  entity   String?  @db.VarChar(40)
+  entityId String?  @db.VarChar(60)
+  detail   Json?
+  at       DateTime @default(now())
+
+  @@index([action, at])
+}
+
+model Contact {
+  id            Int           @id @default(autoincrement())
+  name          String?       @db.VarChar(120)
+  /// E.164, e.g. +919876543210
+  phone         String        @unique @db.VarChar(20)
+  email         String?       @db.VarChar(160)
+  company       String?       @db.VarChar(120)
+  city          String?       @db.VarChar(80)
+  status        ContactStatus @default(NEW)
+  source        String        @default("manual") @db.VarChar(40)
+  tags          String[]      @default([])
+  notes         String?       @db.Text
+  /// Consent to be called by the AI agent (required for automatic outbound calls).
+  consentAt     DateTime?
+  attempts      Int           @default(0)
+  lastAttemptAt DateTime?
+  /// Callback the contact asked for — the dialer calls then.
+  nextCallAt    DateTime?
+  ownerId       Int?
+  owner         User?         @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  calls         Call[]
+  tasks         Task[]
+  appointments  Appointment[]
+
+  @@index([status])
+  @@index([nextCallAt])
+  @@index([createdAt])
+}
+
+model Call {
+  id           Int          @id @default(autoincrement())
+  direction    Direction
+  contactId    Int?
+  contact      Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  /// Vapi call id — matches webhooks to this row.
+  vapiCallId   String?      @unique @db.VarChar(80)
+  fromNumber   String?      @db.VarChar(20)
+  toNumber     String?      @db.VarChar(20)
+  /// Vapi status: queued, ringing, in-progress, forwarding, ended.
+  status       String       @default("queued") @db.VarChar(20)
+  startedAt    DateTime     @default(now())
+  answeredAt   DateTime?
+  endedAt      DateTime?
+  durationSec  Int?
+  endedReason  String?      @db.VarChar(80)
+  outcome      Outcome?
+  summary      String?      @db.Text
+  recordingUrl String?      @db.VarChar(600)
+  /// Vapi cost of the call in US cents.
+  costCents    Int?
+  /// Browser test call (web call) or simulator — kept out of business numbers.
+  isTest       Boolean      @default(false)
+  messages     CallMessage[]
+  tasks        Task[]
+  appointments Appointment[]
+
+  @@index([startedAt])
+  @@index([outcome])
+  @@index([status])
+}
+
+model CallMessage {
+  id     Int      @id @default(autoincrement())
+  callId Int
+  call   Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  seq    Int
+  /// assistant | user | system | tool
+  role   String   @db.VarChar(12)
+  text   String   @db.Text
+  at     DateTime @default(now())
+
+  @@index([callId, seq])
+}
+
+/// Follow-ups for the team: questions the agent could not answer, callbacks, hand-overs.
+model Task {
+  id         Int        @id @default(autoincrement())
+  type       String     @db.VarChar(20)
+  title      String     @db.VarChar(200)
+  details    String?    @db.Text
+  status     TaskStatus @default(OPEN)
+  dueAt      DateTime
+  contactId  Int?
+  contact    Contact?   @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  callId     Int?
+  call       Call?      @relation(fields: [callId], references: [id], onDelete: SetNull)
+  assigneeId Int?
+  assignee   User?      @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  resolution String?    @db.Text
+  doneAt     DateTime?
+  createdAt  DateTime   @default(now())
+
+  @@index([status, dueAt])
+}
+
+model Appointment {
+  id        Int               @id @default(autoincrement())
+  contactId Int?
+  contact   Contact?          @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  callId    Int?
+  call      Call?             @relation(fields: [callId], references: [id], onDelete: SetNull)
+  startsAt  DateTime
+  label     String            @db.VarChar(120)
+  notes     String?           @db.Text
+  status    AppointmentStatus @default(BOOKED)
+  createdAt DateTime          @default(now())
+
+  @@index([startsAt])
+}
+
+model DoNotCall {
+  phone     String   @id @db.VarChar(20)
+  reason    String?  @db.VarChar(120)
+  createdAt DateTime @default(now())
+}
+
+model KnowledgeDocument {
+  id           Int              @id @default(autoincrement())
+  title        String           @db.VarChar(200)
+  category     String           @db.VarChar(40)
+  status       DocStatus        @default(ACTIVE)
+  fileName     String?          @db.VarChar(200)
+  uploadedById Int?
+  uploadedBy   User?            @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime         @default(now())
+  chunks       KnowledgeChunk[]
+}
+
+model KnowledgeChunk {
+  id         Int               @id @default(autoincrement())
+  documentId Int
+  document   KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  heading    String?           @db.VarChar(300)
+  text       String            @db.Text
+  position   Int
+}
+
+/// One row (id 1): business details and calling rules. API keys are never stored here.
+model Settings {
+  id               Int     @id @default(1)
+  businessName     String  @default("Your Business") @db.VarChar(120)
+  agentName        String  @default("Ava") @db.VarChar(60)
+  /// Vapi assistant used for outbound calls (inbound: set on the phone number in Vapi).
+  vapiAssistantId  String? @db.VarChar(80)
+  /// One or more Vapi phone number ids (comma-separated); outbound calls take turns.
+  vapiPhoneNumbers String? @db.VarChar(400)
+  defaultCountry   String  @default("+91") @db.VarChar(5)
+  timezone         String  @default("Asia/Kolkata") @db.VarChar(40)
+  callingStart     String  @default("09:00") @db.VarChar(5)
+  callingEnd       String  @default("21:00") @db.VarChar(5)
+  outboundEnabled  Boolean @default(false)
+  maxAttempts      Int     @default(3)
+  retryGapMinutes  Int     @default(240)
+  maxConcurrent    Int     @default(3)
+  /// Monthly Vapi spend limit in US dollars; the dialer pauses at this.
+  monthlyBudgetUsd Int     @default(100)
+  /// Promise in follow-ups: "our team will get back within … hours".
+  followUpHours    Int     @default(24)
+}

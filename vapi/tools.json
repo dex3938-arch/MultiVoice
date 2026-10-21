@@ -1,0 +1,72 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "search_knowledge",
+      "description": "Look up facts about the business (prices, hours, policies, products, location) in the company's documents. Use before answering any factual question.",
+      "parameters": { "type": "object", "properties": { "question": { "type": "string", "description": "The caller's question in a few words" } }, "required": ["question"] }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "save_contact_details",
+      "description": "Save details the caller shared about themselves.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" }, "email": { "type": "string" }, "company": { "type": "string" },
+          "city": { "type": "string" }, "notes": { "type": "string", "description": "Anything useful for the team, in one or two sentences" }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "book_appointment",
+      "description": "Book an appointment once the caller agreed a date and time. Read back the 'when' value returned.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "date": { "type": "string", "description": "YYYY-MM-DD" },
+          "time": { "type": "string", "description": "HH:MM, 24-hour, business time zone" },
+          "notes": { "type": "string" }
+        },
+        "required": ["date", "time"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "schedule_callback",
+      "description": "The caller wants to be called back later. The system calls them again at that time.",
+      "parameters": { "type": "object", "properties": { "date": { "type": "string", "description": "YYYY-MM-DD" }, "time": { "type": "string", "description": "HH:MM, 24-hour (optional)" } }, "required": ["date"] }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_follow_up",
+      "description": "Create a task for the team: a question you could not answer, a request for a human, or anything that needs action.",
+      "parameters": { "type": "object", "properties": { "reason": { "type": "string", "description": "Short title" }, "details": { "type": "string", "description": "The exact question or request" } }, "required": ["reason"] }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "mark_do_not_call",
+      "description": "The caller asked never to be called again.",
+      "parameters": { "type": "object", "properties": {} }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "record_outcome",
+      "description": "Record how the conversation ended when no other tool did.",
+      "parameters": { "type": "object", "properties": { "outcome": { "type": "string", "enum": ["INTERESTED", "NOT_INTERESTED", "COMPLETED"] } }, "required": ["outcome"] }
+    }
+  }
+]

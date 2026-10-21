@@ -1,0 +1,62 @@
+{
+  "name": "multivoice-calling-agent",
+  "private": true,
+  "version": "1.0.0",
+  "description": "MultiVoice Calling Agent: AI inbound and outbound calling (Vapi + Twilio) with a CRM portal on Supabase and Vercel.",
+  "engines": {
+    "node": ">=20.9"
+  },
+  "scripts": {
+    "dev": "next dev --turbopack -p 3000",
+    "build": "prisma generate && next build",
+    "start": "next start -p 3000",
+    "fast": "npm run build && npm run start",
+    "postinstall": "prisma generate",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "setup": "node scripts/setup.mjs",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "prisma db seed",
+    "db:studio": "prisma studio",
+    "mfa:reset": "tsx prisma/mfa-reset.ts",
+    "db:rls": "prisma db execute --file prisma/rls.sql --schema prisma/schema.prisma",
+    "vercel-build": "prisma generate && prisma migrate deploy && prisma db execute --file prisma/rls.sql --schema prisma/schema.prisma && next build"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "@vapi-ai/web": "2.5.2",
+    "bcryptjs": "^3.0.3",
+    "jose": "^6.2.12",
+    "lucide-react": "^1.55.0",
+    "mammoth": "^1.13.0",
+    "next": "15.5.27",
+    "qrcode": "^1.5.4",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "server-only": "^0.0.1",
+    "unpdf": "^1.8.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^22.20.5",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "15.5.27",
+    "prisma": "^6.19.3",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.15",
+    "typescript": "^5",
+    "vitest": "^5.0.3"
+  },
+  "overrides": {
+    "postcss": "^8.5.23"
+  }
+}
