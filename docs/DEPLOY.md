@@ -22,12 +22,14 @@ authenticator app (Google / Microsoft Authenticator, 1Password …).
 3. **Environment Variables** (copy from `.env`, never into chat or email):
    `DATABASE_URL`, `DIRECT_URL`, `AUTH_SECRET`, `VAPI_API_KEY`, `NEXT_PUBLIC_VAPI_PUBLIC_KEY`,
    `VAPI_WEBHOOK_SECRET`, `CRON_SECRET`, `APP_URL` (your https address, e.g. https://multivoice.vercel.app).
+   The Twilio keys are only needed in `.env` on your computer, for `npm run vapi:setup`.
 4. Deploy. The build runs `prisma migrate deploy` and the RLS script, so later schema updates apply themselves.
 
 `vercel.json` sets the region to Mumbai (`bom1`); change it to the region nearest to your Supabase project.
 
-## 4. Vapi
-Follow docs/VAPI-SETUP.md with `https://YOUR-APP/api/vapi/webhook`.
+## 4. Twilio + Vapi
+Add the Vapi and Twilio keys (docs/VAPI-SETUP.md, step 1), redeploy, then run `npm run vapi:setup` once.
+It creates the tools and assistant in Vapi, imports your Twilio number and fills Settings.
 
 ## 5. Automatic outbound calling (dialer)
 The dialer runs when `/api/dialer/tick` is called with `Authorization: Bearer CRON_SECRET`.

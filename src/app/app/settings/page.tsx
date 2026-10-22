@@ -28,6 +28,7 @@ export default async function SettingsPage() {
     ["VAPI_WEBHOOK_SECRET", (process.env.VAPI_WEBHOOK_SECRET?.trim().length ?? 0) >= 24],
     ["NEXT_PUBLIC_VAPI_PUBLIC_KEY (browser test)", Boolean(process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY)],
     ["CRON_SECRET", (process.env.CRON_SECRET?.trim().length ?? 0) >= 16],
+    ["TWILIO_ACCOUNT_SID + AUTH_TOKEN (setup only)", Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN)],
   ];
   return (
     <>
@@ -39,8 +40,8 @@ export default async function SettingsPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Business name" hint="Sent to the assistant as {{businessName}}"><input name="businessName" defaultValue={s.businessName} required className="input" /></Field>
               <Field label="Agent name" hint="{{agentName}}"><input name="agentName" defaultValue={s.agentName} required className="input" /></Field>
-              <Field label="Vapi assistant id" hint="Vapi → Assistants → copy the ID"><input name="vapiAssistantId" defaultValue={s.vapiAssistantId ?? ""} className="input font-mono text-[0.8rem]" /></Field>
-              <Field label="Vapi phone number ids" hint="Vapi → Phone Numbers (your Twilio numbers). Several = comma separated, calls take turns."><input name="vapiPhoneNumbers" defaultValue={s.vapiPhoneNumbers ?? ""} className="input font-mono text-[0.8rem]" /></Field>
+              <Field label="Vapi assistant id" hint="Filled by npm run vapi:setup, or Vapi → Assistants → ID"><input name="vapiAssistantId" defaultValue={s.vapiAssistantId ?? ""} className="input font-mono text-[0.8rem]" /></Field>
+              <Field label="Vapi phone number ids" hint="Filled by npm run vapi:setup (your Twilio numbers in Vapi). Several = comma separated, outbound calls take turns."><input name="vapiPhoneNumbers" defaultValue={s.vapiPhoneNumbers ?? ""} className="input font-mono text-[0.8rem]" /></Field>
               <Field label="Default country code" hint="For numbers typed without +"><input name="defaultCountry" defaultValue={s.defaultCountry} className="input" /></Field>
               <Field label="Time zone" hint="IANA name, e.g. Asia/Kolkata, America/New_York"><input name="timezone" defaultValue={s.timezone} className="input" /></Field>
               <Field label="Follow-up promise (hours)" hint="“Our team will get back to you within … hours”"><input name="followUpHours" type="number" min={1} max={168} defaultValue={s.followUpHours} className="input" /></Field>

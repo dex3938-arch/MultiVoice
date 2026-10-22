@@ -2,7 +2,7 @@ import "server-only";
 import { prisma } from "./db";
 import { getSettings, phoneNumberIds, type AppSettings } from "./settings";
 import { minutesIn, startOfDay } from "./util";
-import { createVapiCall, vapiConfigured } from "./vapi";
+import { VapiError, createVapiCall, vapiConfigured } from "./vapi";
 import { insideWindow, pickNumber, shouldDial } from "./dialer-rules";
 
 /**
@@ -127,9 +127,20 @@ export async function dialContact(contactId: number, opts: { manual?: boolean } 
   } catch (e) {
     const reason = e instanceof Error ? e.message : "Vapi error";
     await prisma.call.update({ where: { id: row.id }, data: { status: "ended", endedAt: new Date(), outcome: "FAILED", endedReason: reason.slice(0, 80) } });
+    if (isSetupError(e)) {
+      // Our setup is wrong (key, assistant, or a number that cannot dial out), not the customer:
+      // give the attempt and the callback back.
+      await prisma.contact.update({
+        where: { id: contactId },
+        data: { attempts: contact.attempts, lastAttemptAt: contact.lastAttemptAt, nextCallAt: contact.nextCallAt },
+      });
+    }
     throw e;
   }
 }
+
+/** Vapi refused the request itself (4xx except rate limits): retrying other contacts would fail the same way. */
+export const isSetupError = (e: unknown) => e instanceof VapiError && e.status >= 400 && e.status < 500 && e.status !== 429;
 
 /** One dialer round. Safe to run often; never exceeds the concurrency limit or the budget. */
 export async function runDialer(now = new Date()) {
@@ -143,8 +154,9 @@ export async function runDialer(now = new Date()) {
     try {
       await dialContact(c.id);
       placed++;
-    } catch {
+    } catch (e) {
       failed++;
+      if (isSetupError(e)) return { placed, failed, closed, status: { ...status, ready: false, reasons: [`Vapi refused the call: ${(e as Error).message}`] } };
     }
   }
   return { placed, failed, closed, status };

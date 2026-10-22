@@ -8,7 +8,7 @@
 | Roles | Super Admin (users), Manager (settings, campaigns, knowledge), Agent (contacts, calls, follow-ups), Viewer (read only). Checked on the server in every page and action |
 | Audit log | Sign-ins, failures, MFA events, contact edits, imports, calls placed, settings, user changes |
 | Webhooks | `/api/vapi/webhook` needs `VAPI_WEBHOOK_SECRET` (Bearer token, compared in constant time), 1 MB body limit. `/api/dialer/tick` needs `CRON_SECRET` |
-| Keys | `VAPI_API_KEY`, database URL and secrets exist only in server environment variables; nothing secret is stored in the database or sent to the browser (the Vapi *public* key can only start web calls) |
+| Keys | Twilio Account SID / Auth Token stay in your local `.env` and are sent only to Twilio and to Vapi (which needs them to use the number). `VAPI_API_KEY`, database URL and secrets exist only in server environment variables; nothing secret is stored in the database or sent to the browser (the Vapi *public* key can only start web calls) |
 | Browser | CSP (Vapi/Daily allowed only on the test-call page), HSTS, X-Frame-Options DENY, nosniff, strict referrer, microphone only on the test-call page, CSRF origin check on API routes and server actions |
 | Database | Supabase RLS on every table and no access for the public `anon` / `authenticated` roles (`prisma/rls.sql`); the app connects as the owner through Prisma |
 | SEO vs privacy | Only the landing page is indexed. `/app`, `/login`, `/setup-mfa` and `/api` send `X-Robots-Tag: noindex` and are disallowed in robots.txt |

@@ -1,5 +1,5 @@
 /**
- * Phone numbers are stored in E.164 (+<country><number>), which is what Vapi and Twilio need.
+ * Phone numbers are stored in E.164 (+<country><number>), which is what Vapi needs.
  * Numbers typed without a country code get the default one from Settings (e.g. +91).
  */
 export function toE164(raw: string, defaultCountry = "+91"): string | null {

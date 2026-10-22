@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 
 /**
  * Vapi runs the conversation (speech-to-text, the AI model, the voice) and the phone line (a Twilio number
- * imported into Vapi). This app places outbound calls through Vapi's API and receives every call event on
+ * imported into Vapi by `npm run vapi:setup`). This app places outbound calls through Vapi's API and receives every call event on
  * /api/vapi/webhook. The private API key never leaves the server.
  */
 

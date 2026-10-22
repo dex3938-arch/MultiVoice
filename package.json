@@ -21,7 +21,8 @@
     "db:studio": "prisma studio",
     "mfa:reset": "tsx prisma/mfa-reset.ts",
     "db:rls": "prisma db execute --file prisma/rls.sql --schema prisma/schema.prisma",
-    "vercel-build": "prisma generate && prisma migrate deploy && prisma db execute --file prisma/rls.sql --schema prisma/schema.prisma && next build"
+    "vercel-build": "prisma generate && prisma migrate deploy && prisma db execute --file prisma/rls.sql --schema prisma/schema.prisma && next build",
+    "vapi:setup": "node scripts/vapi-setup.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

@@ -20,7 +20,7 @@ const FEATURES = [
 ];
 
 const STEPS = [
-  { n: "1", title: "Connect", body: "Create a Vapi assistant and import your Twilio number. Paste two ids into Settings." },
+  { n: "1", title: "Connect", body: "Add your Vapi and Twilio keys and run one setup command: tools, assistant and number are connected for you." },
   { n: "2", title: "Teach", body: "Upload your FAQ and documents. The agent answers only from them." },
   { n: "3", title: "Call", body: "Inbound calls are answered at once; switch on the dialer for outbound." },
 ];

@@ -2,8 +2,8 @@
 
 AI voice agent for **inbound and outbound phone calls** with a built-in **CRM portal**.
 
-- **Vapi**: voice conversation (speech-to-text, AI model, voice) + phone line
-- **Twilio**: phone numbers (imported into Vapi)
+- **Vapi**: voice conversation (speech-to-text, AI model, voice) and browser calls (Vapi uses Daily for audio internally, no separate Daily account needed)
+- **Twilio**: phone numbers, imported into Vapi automatically by `npm run vapi:setup`
 - **Supabase**: Postgres database
 - **Vercel**: hosting (Next.js 15, React 19, Tailwind 4)
 
@@ -22,7 +22,7 @@ npm install
 npm run setup      # asks for Supabase URLs, writes .env, creates tables + admin
 npm run dev        # http://localhost:3000
 ```
-Then: docs/DEPLOY.md (Vercel) → docs/VAPI-SETUP.md (Vapi + Twilio).
+Then: docs/DEPLOY.md (Vercel) → docs/VAPI-SETUP.md (Twilio + Vapi, one command: `npm run vapi:setup`).
 
 ## Scripts
 | Command | |
@@ -32,6 +32,7 @@ Then: docs/DEPLOY.md (Vercel) → docs/VAPI-SETUP.md (Vapi + Twilio).
 | `npm test` | unit tests (call logic, dialer rules, phone numbers, knowledge search, TOTP, webhook auth) |
 | `npm run typecheck` / `npm run lint` | checks |
 | `npm run db:deploy` / `npm run db:rls` / `npm run db:seed` | migrations / RLS lock / starting data |
+| `npm run vapi:setup` | connect Twilio + Vapi: tools, assistant, number import, Settings |
 | `npm run mfa:reset -- email` | emergency two-factor reset |
 
 ## Project layout
