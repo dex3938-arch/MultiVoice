@@ -3,7 +3,7 @@
     "type": "function",
     "function": {
       "name": "search_knowledge",
-      "description": "Look up facts about the business (prices, hours, policies, products, location) in the company's documents. Use before answering any factual question.",
+      "description": "Look up information in the knowledge base on ANY question asked by the caller, including technical concepts (such as Java, OOPs, Spring Boot, Collection Framework), company services, products, FAQs, pricing, policies, and hours. Use before answering any factual or technical question.",
       "parameters": { "type": "object", "properties": { "question": { "type": "string", "description": "The caller's question in a few words" } }, "required": ["question"] }
     }
   },
