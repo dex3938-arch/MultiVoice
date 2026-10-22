@@ -122,6 +122,11 @@ async function main() {
       name: ASSISTANT_NAME,
       firstMessageMode: "assistant-speaks-first",
       firstMessage: `Hello, this is {{agentName}} from {{businessName}}. How can I help you today?`,
+      voice: {
+        provider: "11labs",
+        model: "eleven_flash_v2_5",
+        voiceId: "sarah",
+      },
       model: { provider: "openai", model: MODEL, temperature: 0.3, messages: [{ role: "system", content: prompt }], toolIds },
       server,
       serverMessages: ["status-update", "end-of-call-report", "tool-calls"],
