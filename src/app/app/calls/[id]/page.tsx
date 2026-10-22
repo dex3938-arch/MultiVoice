@@ -75,10 +75,10 @@ export default async function CallPage({ params }: { params: Promise<{ id: strin
               </ul>
             )}
           </Card>
-          {call.recordingUrl && (
+          {(call.recordingUrl || call.vapiCallId) && (
             <Card>
               <CardHeader title="Recording" icon={AudioLines} />
-              <audio controls preload="none" src={call.recordingUrl} className="w-full" />
+              <audio controls preload="none" src={`/api/calls/${call.id}/recording`} className="w-full" />
             </Card>
           )}
           <Card>
