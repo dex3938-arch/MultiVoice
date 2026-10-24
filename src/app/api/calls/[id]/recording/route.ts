@@ -26,23 +26,44 @@ export async function GET(
     return NextResponse.json({ error: "Recording not found" }, { status: 404 });
   }
 
-  const vapiKey = process.env.VAPI_API_KEY;
-  if (call.provider === "vapi" && call.externalId && vapiKey) {
-    try {
-      const vapiRes = await fetch(
-        `https://api.vapi.ai/call/${call.externalId}/mono-recording`,
-        {
-          headers: { Authorization: `Bearer ${vapiKey}` },
-          redirect: "manual",
-        },
-      );
+  const vapiId =
+    call.externalId ||
+    call.recordingUrl?.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)?.[1];
 
-      const location = vapiRes.headers.get("location");
-      if (location) {
-        return NextResponse.redirect(location, 307);
+  const keys = [
+    process.env.VAPI_API_KEY,
+    "d2163e52-c537-40c6-b75e-709b62853f2a",
+    "0902ea4d-ee53-4e02-9ac2-4c25b68c4e42",
+  ].filter(Boolean) as string[];
+
+  if ((!call.provider || call.provider === "vapi") && vapiId) {
+    for (const key of Array.from(new Set(keys))) {
+      try {
+        const vapiRes = await fetch(
+          `https://api.vapi.ai/call/${vapiId}/mono-recording`,
+          {
+            headers: { Authorization: `Bearer ${key}` },
+            redirect: "manual",
+          },
+        );
+
+        if (vapiRes.status === 302 || vapiRes.status === 307) {
+          const location = vapiRes.headers.get("location");
+          if (location) {
+            return NextResponse.redirect(location, 307);
+          }
+        }
+
+        if (vapiRes.ok) {
+          return new NextResponse(vapiRes.body, {
+            headers: {
+              "Content-Type": vapiRes.headers.get("content-type") || "audio/wav",
+            },
+          });
+        }
+      } catch (e) {
+        console.error("Failed to fetch signed recording from Vapi:", e);
       }
-    } catch (e) {
-      console.error("Failed to fetch signed recording from Vapi:", e);
     }
   }
 
