@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
+import { badSecret, blocked, requestIp } from "@/lib/rate-limit";
 import { runDialer } from "@/lib/dialer";
 
 /**
@@ -18,7 +19,12 @@ function authorized(req: NextRequest) {
 }
 
 async function tick(req: NextRequest) {
-  if (!authorized(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const ip = requestIp(req.headers);
+  if (blocked(ip)) return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  if (!authorized(req)) {
+    badSecret(ip);
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
   const r = await runDialer();
   return NextResponse.json({ placed: r.placed, failed: r.failed, closedStale: r.closed, ready: r.status.ready, reasons: r.status.reasons });
 }

@@ -6,7 +6,9 @@ import type { RoleValue } from "@/lib/roles";
  * Edge-safe (used by middleware) — no Node-only imports here.
  */
 
-export const SESSION_COOKIE = "mv_session";
+/** "__Host-" (https only, this host only, path /): the browser refuses to let a subdomain or http page set it. */
+const PREFIX = process.env.NODE_ENV === "production" ? "__Host-" : "";
+export const SESSION_COOKIE = `${PREFIX}mv_session`;
 export const SESSION_TTL_SECONDS = 8 * 60 * 60;
 
 /** v = user's sessionVersion when signed in; mfa = the second step (authenticator code) was passed. */
@@ -55,7 +57,7 @@ export const sessionCookieOptions = {
 // ---------------------------------------------------------------- second sign-in step
 
 /** After a correct password the browser gets this 5-minute ticket — it only opens the code page. */
-export const MFA_COOKIE = "mv_mfa";
+export const MFA_COOKIE = `${PREFIX}mv_mfa`;
 export const MFA_TTL_SECONDS = 5 * 60;
 
 export async function signMfaTicket(sub: string, v: number): Promise<string> {

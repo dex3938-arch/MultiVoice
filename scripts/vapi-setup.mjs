@@ -9,6 +9,8 @@
  * 3. creates / updates the assistant (prompt from vapi/assistant-prompt.md)
  * 4. imports the Twilio number(s) into Vapi and attaches the assistant for inbound calls
  * 5. saves the assistant id and phone number ids in Settings (database)
+ * 6. with DOGRAH_API_KEY set: checks the Dograh key and points the Twilio number(s) at this app's inbound
+ *    router (/api/twilio/voice), so inbound calls go to Vapi and fall back to Dograh
  *
  * Needs in .env: VAPI_API_KEY, VAPI_WEBHOOK_SECRET, APP_URL (public https address, not localhost),
  * TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBERS, DATABASE_URL.
@@ -71,9 +73,11 @@ async function vapi(method, path, body) {
   return json;
 }
 
-async function twilio(path) {
+async function twilio(path, form) {
   const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(TW_SID)}${path}`, {
-    headers: { Authorization: `Basic ${Buffer.from(`${TW_SID}:${TW_TOKEN}`).toString("base64")}` },
+    method: form ? "POST" : "GET",
+    headers: { Authorization: `Basic ${Buffer.from(`${TW_SID}:${TW_TOKEN}`).toString("base64")}`, ...(form ? { "Content-Type": "application/x-www-form-urlencoded" } : {}) },
+    body: form ? new URLSearchParams(form).toString() : undefined,
     signal: AbortSignal.timeout(20_000),
   });
   if (res.status === 401) fail("Twilio refused the Account SID / Auth Token. Copy them again from the Twilio Console.");
@@ -95,11 +99,13 @@ async function main() {
     // 1. Twilio
     const account = await twilio(".json");
     console.log(green(`✓ Twilio account: ${account.friendly_name} (${account.status}${account.type === "Trial" ? ", TRIAL: can only call verified numbers" : ""})`));
+    const twilioSids = {};
     for (const n of TW_NUMBERS) {
       const list = await twilio(`/IncomingPhoneNumbers.json?PhoneNumber=${encodeURIComponent(n)}`);
       const found = list.incoming_phone_numbers?.[0];
       if (!found) fail(`${n} is not a number on this Twilio account.`);
       if (found.capabilities && found.capabilities.voice === false) fail(`${n} has no voice capability on Twilio.`);
+      twilioSids[n] = found.sid;
       console.log(green(`✓ Twilio number ${n} found`));
     }
 
@@ -122,12 +128,7 @@ async function main() {
       name: ASSISTANT_NAME,
       firstMessageMode: "assistant-speaks-first",
       firstMessage: `Hello, this is {{agentName}} from {{businessName}}. How can I help you today?`,
-      voice: {
-        provider: "11labs",
-        model: "eleven_flash_v2_5",
-        voiceId: "sarah",
-      },
-      model: { provider: "openai", model: MODEL, temperature: 0.3, messages: [{ role: "system", content: prompt }], toolIds },
+      model: { provider: "openai", model: MODEL, temperature: 0.3, maxTokens: 220, messages: [{ role: "system", content: prompt }], toolIds },
       server,
       serverMessages: ["status-update", "end-of-call-report", "tool-calls"],
       artifactPlan: { recordingEnabled: true },
@@ -153,9 +154,41 @@ async function main() {
       console.log(green(`✓ ${n} ${match ? "updated in" : "imported into"} Vapi (${pn.id})`));
     }
 
+    // Vapi set the Twilio Voice URL to its own inbound endpoint: remember it for the inbound router.
+    let vapiInboundUrl = settings.vapiInboundUrl;
+    const first = await twilio(`/IncomingPhoneNumbers/${twilioSids[TW_NUMBERS[0]]}.json`);
+    if (first.voice_url && /^https:\/\//.test(first.voice_url) && !first.voice_url.startsWith(APP_URL)) vapiInboundUrl = first.voice_url;
+
     // 5. Settings
-    await prisma.settings.update({ where: { id: 1 }, data: { vapiAssistantId: assistant.id, vapiPhoneNumbers: phoneIds.join(",") } });
-    console.log(green("✓ saved assistant id and phone number ids in Settings"));
+    await prisma.settings.update({ where: { id: 1 }, data: { vapiAssistantId: assistant.id, vapiPhoneNumbers: phoneIds.join(","), vapiInboundUrl } });
+    console.log(green("✓ saved assistant id, phone number ids and Vapi inbound URL in Settings"));
+
+    // 6. Dograh (optional backup provider)
+    const DOGRAH_KEY = env("DOGRAH_API_KEY");
+    if (DOGRAH_KEY) {
+      const base = (settings.dograhBaseUrl || "https://app.dograh.com").replace(/\/$/, "");
+      try {
+        const r = await fetch(`${base}/api/v1/workflow/fetch`, { headers: { "X-API-Key": DOGRAH_KEY }, signal: AbortSignal.timeout(15_000) });
+        if (r.status === 401 || r.status === 403) console.log(red(`! Dograh refused DOGRAH_API_KEY (${base}). Check Dograh → Settings → API Keys.`));
+        else if (r.ok) {
+          const j = await r.json().catch(() => null);
+          const list = Array.isArray(j) ? j : Array.isArray(j?.workflows) ? j.workflows : [];
+          console.log(green(`✓ Dograh key accepted${list.length ? `, agents: ${list.slice(0, 5).map((w) => `${w.name ?? "agent"} (${w.workflow_uuid ?? w.uuid ?? w.id})`).join(", ")}` : ""}`));
+        } else console.log(`• Dograh answered ${r.status}; the key is checked again on the first call.`);
+      } catch {
+        console.log(red(`! Could not reach Dograh at ${base}.`));
+      }
+      if (!settings.dograhAgentUuid) console.log(`• Put your Dograh agent UUID in portal Settings → Voice providers.`);
+      if (settings.inboundRouter && env("INBOUND_ROUTER") !== "off") {
+        if (!env("TWILIO_AUTH_TOKEN")) fail("TWILIO_AUTH_TOKEN is needed for the inbound router.");
+        for (const n of TW_NUMBERS) {
+          await twilio(`/IncomingPhoneNumbers/${twilioSids[n]}.json`, { VoiceUrl: `${APP_URL}/api/twilio/voice`, VoiceMethod: "POST" });
+          console.log(green(`✓ ${n}: inbound calls now go through ${APP_URL}/api/twilio/voice (Vapi, then Dograh)`));
+        }
+        console.log("  Add TWILIO_AUTH_TOKEN to Vercel too: the router uses it to check Twilio's signature.");
+        console.log("  If you later save an inbound workflow in Dograh, it overwrites the Twilio Voice URL: run this command again.");
+      }
+    }
 
     console.log(bold(green("\n✓ Twilio + Vapi connected\n")));
     console.log(`Webhook:   ${WEBHOOK}`);

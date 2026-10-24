@@ -158,7 +158,7 @@ export async function verifyMfa(_prev: MfaState, formData: FormData): Promise<Mf
 
 // ---------------------------------------------------------------- first-time setup
 
-const SETUP_COOKIE = "mv_mfa_setup";
+const SETUP_COOKIE = `${process.env.NODE_ENV === "production" ? "__Host-" : ""}mv_mfa_setup`;
 
 export type SetupStart = { secret?: string; qr?: string; error?: string } | undefined;
 export type SetupDone = { codes?: string[]; error?: string } | undefined;

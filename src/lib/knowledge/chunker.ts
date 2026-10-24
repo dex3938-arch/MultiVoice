@@ -10,7 +10,8 @@ export type Chunk = { heading?: string; text: string; metadata?: Record<string, 
 const TARGET = 650; // fits the 700-character passages the AI reads
 const HARD_MAX = 1400;
 
-const sentences = (p: string) => p.match(/[^.!?।]+[.!?।]+["')\]]*\s*|[^.!?।]+$/g)?.map((s) => s.trim()).filter(Boolean) ?? [p];
+/** Sentences end at . ! ? । followed by a space, so ".NET", "3.5" and "e.g." inside a sentence stay whole. */
+const sentences = (p: string) => p.split(/(?<=[.!?।]["')\]]*)\s+/).map((s) => s.trim()).filter(Boolean);
 
 export function chunkSections(sections: Section[]): Chunk[] {
   const out: Chunk[] = [];
@@ -43,7 +44,11 @@ export function chunkSections(sections: Section[]): Chunk[] {
   return out;
 }
 
-/** Split free text (uploads) into sections by markdown/ALL-CAPS headings. */
+/**
+ * Split free text (uploads) into sections. Headings are: markdown "## …"; otherwise a short line that is a
+ * question ("What is Java?", "Q3. How do I pay?"), a numbered heading ("2.1 Installation"), "Chapter 4 …" or
+ * ALL CAPS. "A:" / "Answer:" prefixes are dropped from answers.
+ */
 export function sectionsFromText(text: string, fallbackHeading?: string): Section[] {
   const lines = text.replace(/\r/g, "").split("\n");
   const sections: Section[] = [];
@@ -53,15 +58,24 @@ export function sectionsFromText(text: string, fallbackHeading?: string): Sectio
     if (body.join("").trim()) sections.push({ heading, text: body.join("\n") });
     body = [];
   };
-  // Documents written with "## Question" headings: ALL-CAPS lines inside answers are text, not headings.
+  // Documents written with "## Question" headings: other heading styles inside answers are text.
   const hasMarkdown = lines.some((l) => /^\s*#{1,4}\s+\S/.test(l));
-  for (const line of lines) {
-    const md = line.match(/^\s*#{1,4}\s+(.+)/);
-    const caps = !md && !hasMarkdown && line.trim().length > 3 && line.trim().length < 80 && line.trim() === line.trim().toUpperCase() && /[A-Z]/.test(line);
-    if (md || caps) {
+  for (const raw of lines) {
+    const line = raw.trim();
+    const md = raw.match(/^\s*#{1,4}\s+(.+)/);
+    let h: string | null = md ? md[1].trim() : null;
+    if (!h && !hasMarkdown && line.length >= 6 && line.length <= 200) {
+      const q = line.match(/^(?:q(?:uestion)?\s*\d*\s*[:.)-]\s*)?(.+\?)$/i);
+      if (q) h = q[1].trim();
+      else if (line.length < 90 && !/[.,;:]$/.test(line)) {
+        if (/^(chapter|section|part|unit|module|lesson)\s+[\w.]+/i.test(line) || /^\d+(\.\d+){0,3}\.?\s+[A-Z][^.!?]*$/.test(line)) h = line;
+        else if (line.length > 3 && line === line.toUpperCase() && /[A-Z]{3}/.test(line)) h = line;
+      }
+    }
+    if (h) {
       push();
-      heading = (md ? md[1] : line).trim();
-    } else body.push(line);
+      heading = h.slice(0, 300);
+    } else body.push(raw.replace(/^\s*(a|ans|answer)\s*[:.)-]\s*/i, ""));
   }
   push();
   return sections;

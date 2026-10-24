@@ -1,0 +1,12 @@
+{
+  "event": "call_ended",
+  "run_id": "{{workflow_run_id}}",
+  "direction": "{{initial_context.direction}}",
+  "phone": "{{initial_context.phone_number}}",
+  "disposition": "{{gathered_context.call_disposition}}",
+  "summary": "{{gathered_context.summary}}",
+  "duration": "{{cost_info.call_duration_seconds}}",
+  "call_time": "{{call_time}}",
+  "recording_url": "{{recording_url}}",
+  "transcript_url": "{{transcript_url}}"
+}

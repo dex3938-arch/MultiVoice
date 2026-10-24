@@ -8,6 +8,7 @@ import { formatPhone } from "@/lib/phone";
 import { MANAGERS } from "@/lib/roles";
 import { getSettings } from "@/lib/settings";
 import { formatDateTime, usd } from "@/lib/util";
+import { PROVIDER_LABEL } from "@/lib/providers/failover";
 import { ActionForm } from "../_components/ActionForm";
 import { AutoRefresh } from "../_components/AutoRefresh";
 import { Badge, Card, CardHeader, Empty, PageTitle, Stat } from "../_components/ui";
@@ -47,6 +48,7 @@ export default async function CampaignsPage() {
           <CardHeader title={st.ready ? "Ready to dial" : "Not dialing"} sub={`Calling hours ${s.callingStart}–${s.callingEnd} (${s.timezone}) · ${s.maxAttempts} attempts · retry after ${s.retryGapMinutes} min`} icon={st.ready ? CheckCircle2 : CircleAlert}>
             {st.ready ? <Badge tone="green" dot>ready</Badge> : <Badge tone="amber" dot>paused</Badge>}
           </CardHeader>
+          <p className="mb-3 text-sm text-ink-2">Voice providers in use now: <b>{st.providers.length ? st.providers.map((p) => PROVIDER_LABEL[p]).join(" → ") : "none"}</b> <span className="text-muted">(first one takes the call, the next one is the backup)</span></p>
           {!st.ready && (
             <ul className="mb-4 space-y-1.5 text-sm">
               {st.reasons.map((r) => <li key={r} className="rounded-xl bg-amber-50/90 px-3 py-2 text-amber-800 ring-1 ring-amber-600/15">{r}</li>)}

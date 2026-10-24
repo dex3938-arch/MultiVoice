@@ -2,12 +2,17 @@ import "server-only";
 import { prisma } from "./db";
 import { getSettings, phoneNumberIds, type AppSettings } from "./settings";
 import { minutesIn, startOfDay } from "./util";
-import { VapiError, createVapiCall, vapiConfigured } from "./vapi";
+import { createVapiCall } from "./vapi";
 import { insideWindow, pickNumber, shouldDial } from "./dialer-rules";
+import { createDograhCall } from "./providers/dograh";
+import { PROVIDER_LABEL, ProviderError, isOurSide, type FailureKind, type ProviderId } from "./providers/failover";
+import { activeProviders, providerSetup, recordFailure, recordSuccess } from "./providers/state";
 
 /**
  * Automatic outbound calling. Runs on each tick (Vercel Cron, "Run now", or the live-dialing toggle):
- * checks the rules, then places up to `maxConcurrent - live` calls through Vapi.
+ * checks the rules, then places up to `maxConcurrent - live` calls. Each call goes to the first healthy
+ * provider (Settings → provider order); if that one fails on our side (credits, key, outage) the next one
+ * takes the same call straight away.
  */
 
 const LIVE = ["queued", "ringing", "in-progress", "forwarding"];
@@ -39,12 +44,14 @@ export type DialerStatus = {
   inWindow: boolean;
 };
 
-export async function dialerStatus(now = new Date()): Promise<DialerStatus> {
+export async function dialerStatus(now = new Date()): Promise<DialerStatus & { providers: ProviderId[] }> {
   const s = await getSettings();
   const reasons: string[] = [];
-  if (!vapiConfigured()) reasons.push("VAPI_API_KEY is not set on the server.");
-  if (!s.vapiAssistantId) reasons.push("No Vapi assistant id in Settings.");
-  if (!phoneNumberIds(s).length) reasons.push("No Vapi phone number id in Settings.");
+  const [providers, setup] = await Promise.all([activeProviders(now), providerSetup()]);
+  if (!providers.length) {
+    const why = (Object.keys(setup) as ProviderId[]).map((p) => (setup[p].configured ? `${PROVIDER_LABEL[p]} is resting after an error` : `${PROVIDER_LABEL[p]} needs ${setup[p].missing.join(", ")}`));
+    reasons.push(`No voice provider available: ${why.join("; ")}.`);
+  }
   if (!s.outboundEnabled) reasons.push("Automatic calling is switched off in Settings.");
   const inWindow = insideWindow(minutesIn(s.timezone, now), s.callingStart, s.callingEnd);
   if (!inWindow) reasons.push(`Outside calling hours (${s.callingStart}–${s.callingEnd}, ${s.timezone}).`);
@@ -55,7 +62,7 @@ export async function dialerStatus(now = new Date()): Promise<DialerStatus> {
   const budgetCents = s.monthlyBudgetUsd * 100;
   if (spentCents >= budgetCents) reasons.push("Monthly budget reached.");
   const free = Math.max(0, s.maxConcurrent - live);
-  return { ready: reasons.length === 0, reasons, live, free, spentCents, budgetCents, inWindow };
+  return { ready: reasons.length === 0, reasons, live, free, spentCents, budgetCents, inWindow, providers };
 }
 
 /** Contacts the dialer would call now, oldest first, callbacks first. */
@@ -82,13 +89,14 @@ export async function dueContacts(limit: number, now = new Date()) {
 }
 
 /**
- * Call one contact. The Call row is written first (so the webhook always finds it); if Vapi refuses,
- * the row is marked FAILED with the reason.
+ * Call one contact. The Call row is written first (so the webhook always finds it). Providers are tried in
+ * order; a provider that fails on our side rests and the next one takes the call. If every provider fails,
+ * the row is marked FAILED and, when the cause is ours, the contact's attempt is given back.
  */
 export async function dialContact(contactId: number, opts: { manual?: boolean } = {}) {
   const s = await getSettings();
-  const numbers = phoneNumberIds(s);
-  if (!vapiConfigured() || !s.vapiAssistantId || !numbers.length) throw new Error("Vapi is not set up yet (API key, assistant id and phone number id).");
+  const providers = await activeProviders();
+  if (!providers.length) throw new DialError("No voice provider is available (check Settings → Voice providers).", "auth");
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) throw new Error("Contact not found.");
   if (await prisma.doNotCall.findUnique({ where: { phone: contact.phone } })) throw new Error("This number is on the Do-Not-Call list.");
@@ -96,8 +104,6 @@ export async function dialContact(contactId: number, opts: { manual?: boolean } 
   const callbackDue = Boolean(contact.nextCallAt && contact.nextCallAt <= new Date());
   if (!opts.manual && !contact.consentAt && !callbackDue) throw new Error("No calling consent recorded.");
 
-  const callsSoFar = await prisma.call.count({ where: { direction: "OUTBOUND" } });
-  const phoneNumberId = pickNumber(numbers, callsSoFar)!;
   // Atomic claim: if two ticks pick the same contact at once, only one of them places the call.
   const claim = await prisma.contact.updateMany({
     where: { id: contactId, attempts: contact.attempts },
@@ -105,42 +111,71 @@ export async function dialContact(contactId: number, opts: { manual?: boolean } 
     data: { attempts: { increment: 1 }, lastAttemptAt: new Date(), ...(callbackDue ? { nextCallAt: null } : {}) },
   });
   if (claim.count !== 1) throw new Error("This contact is already being called.");
-  const row = await prisma.call.create({ data: { direction: "OUTBOUND", contactId, toNumber: contact.phone, status: "queued" } });
-  try {
-    const vapi = await createVapiCall({
-      assistantId: s.vapiAssistantId,
-      phoneNumberId,
-      customer: { number: contact.phone, name: contact.name ?? undefined },
-      variableValues: {
-        customerName: contact.name ?? "",
-        businessName: s.businessName,
-        agentName: s.agentName,
-        company: contact.company ?? "",
-        city: contact.city ?? "",
-        notes: (contact.notes ?? "").slice(0, 500),
-      },
-      name: `contact-${contact.id}`,
-    });
-    // The webhook may have attached the id already (it can be faster than this response).
-    await prisma.call.updateMany({ where: { id: row.id, vapiCallId: null }, data: { vapiCallId: vapi.id } });
-    return row;
-  } catch (e) {
-    const reason = e instanceof Error ? e.message : "Vapi error";
-    await prisma.call.update({ where: { id: row.id }, data: { status: "ended", endedAt: new Date(), outcome: "FAILED", endedReason: reason.slice(0, 80) } });
-    if (isSetupError(e)) {
-      // Our setup is wrong (key, assistant, or a number that cannot dial out), not the customer:
-      // give the attempt and the callback back.
-      await prisma.contact.update({
-        where: { id: contactId },
-        data: { attempts: contact.attempts, lastAttemptAt: contact.lastAttemptAt, nextCallAt: contact.nextCallAt },
-      });
+  const row = await prisma.call.create({ data: { direction: "OUTBOUND", provider: providers[0], contactId, toNumber: contact.phone, status: "queued" } });
+
+  const context = {
+    customerName: contact.name ?? "",
+    businessName: s.businessName,
+    agentName: s.agentName,
+    company: contact.company ?? "",
+    city: contact.city ?? "",
+    notes: (contact.notes ?? "").slice(0, 500),
+  };
+  const errors: { provider: ProviderId; kind: FailureKind; message: string }[] = [];
+  for (const provider of providers) {
+    try {
+      if (row.provider !== provider) await prisma.call.update({ where: { id: row.id }, data: { provider } });
+      const placed = await placeWith(provider, s, contact.phone, contact.name, contact.id, context);
+      // The webhook may have attached the id already (it can be faster than this response).
+      await prisma.call.updateMany({ where: { id: row.id, externalId: null }, data: { externalId: placed.id } });
+      await recordSuccess(provider);
+      return { ...row, provider, failedOver: errors.length > 0 };
+    } catch (e) {
+      const pe = e instanceof ProviderError ? e : new ProviderError(e instanceof Error ? e.message : "error", provider, "down");
+      errors.push({ provider, kind: pe.kind, message: pe.message });
+      await recordFailure(provider, pe.kind, pe.message);
+      // A problem with this customer's number would fail everywhere: do not burn the other provider.
+      if (pe.kind === "request" && providers.length > 1 && /number|phone|e\.?164|invalid customer/i.test(pe.message)) break;
     }
-    throw e;
   }
+  const reason = errors.map((x) => `${PROVIDER_LABEL[x.provider]}: ${x.message}`).join(" | ");
+  await prisma.call.update({ where: { id: row.id }, data: { status: "ended", endedAt: new Date(), outcome: "FAILED", endedReason: reason.slice(0, 80) } });
+  const ours = errors.every((x) => isOurSide(x.kind));
+  if (ours) {
+    // Credits, keys or an outage, not the customer: give the attempt and the callback back.
+    await prisma.contact.update({ where: { id: contactId }, data: { attempts: contact.attempts, lastAttemptAt: contact.lastAttemptAt, nextCallAt: contact.nextCallAt } });
+  }
+  throw new DialError(reason || "The call could not be placed.", ours ? errors[errors.length - 1].kind : "request");
 }
 
-/** Vapi refused the request itself (4xx except rate limits): retrying other contacts would fail the same way. */
-export const isSetupError = (e: unknown) => e instanceof VapiError && e.status >= 400 && e.status < 500 && e.status !== 429;
+async function placeWith(provider: ProviderId, s: AppSettings, phone: string, name: string | null, contactId: number, context: Record<string, string>) {
+  if (provider === "vapi") {
+    const numbers = phoneNumberIds(s);
+    const callsSoFar = await prisma.call.count({ where: { direction: "OUTBOUND", provider: "vapi" } });
+    return createVapiCall({
+      assistantId: s.vapiAssistantId!,
+      phoneNumberId: pickNumber(numbers, callsSoFar)!,
+      customer: { number: phone, name: name ?? undefined },
+      variableValues: context,
+      name: `contact-${contactId}`,
+    });
+  }
+  return createDograhCall({
+    baseUrl: s.dograhBaseUrl,
+    agentUuid: s.dograhAgentUuid!,
+    phoneNumber: phone,
+    context: { ...context, phone_number: phone, direction: "outbound", contact_id: String(contactId) },
+    telephonyConfigId: s.dograhTelephonyConfigId,
+    fromNumberId: s.dograhFromNumberId,
+  });
+}
+
+/** Every provider failed. `kind` tells the dialer whether to stop the round (our side) or go on. */
+export class DialError extends Error {
+  constructor(message: string, readonly kind: FailureKind) {
+    super(message);
+  }
+}
 
 /** One dialer round. Safe to run often; never exceeds the concurrency limit or the budget. */
 export async function runDialer(now = new Date()) {
@@ -156,7 +191,9 @@ export async function runDialer(now = new Date()) {
       placed++;
     } catch (e) {
       failed++;
-      if (isSetupError(e)) return { placed, failed, closed, status: { ...status, ready: false, reasons: [`Vapi refused the call: ${(e as Error).message}`] } };
+      // No provider can take calls right now: stop instead of failing every contact in the queue.
+      if (e instanceof DialError && isOurSide(e.kind) && !(await activeProviders()).length)
+        return { placed, failed, closed, status: { ...status, ready: false, reasons: [`All voice providers are resting: ${e.message}`] } };
     }
   }
   return { placed, failed, closed, status };

@@ -4,11 +4,15 @@
 |---|---|
 | Sign-in | bcrypt passwords (12+ chars), **mandatory TOTP two-factor** (authenticator app), 8 one-time recovery codes, replay protection on codes |
 | Brute force | 5 failed passwords per account / 20 per IP in 15 min (stored in the database, so it holds across Vercel instances), 5 wrong codes per account, random delay on failures |
-| Sessions | Signed JWT in an HttpOnly, Secure, SameSite=Strict cookie, 8 h. Password change, MFA reset, role change and deactivation bump `sessionVersion` → old sessions stop at once |
+| Sessions | Signed JWT in an HttpOnly, Secure, SameSite=Strict `__Host-` cookie (production), 8 h. Password change, MFA reset, role change and deactivation bump `sessionVersion` → old sessions stop at once |
 | Roles | Super Admin (users), Manager (settings, campaigns, knowledge), Agent (contacts, calls, follow-ups), Viewer (read only). Checked on the server in every page and action |
 | Audit log | Sign-ins, failures, MFA events, contact edits, imports, calls placed, settings, user changes |
+| Abuse | 20 requests with a wrong webhook secret / Twilio signature in 10 min → that address is refused (429) for the rest of the window |
+| Inbound router | `/api/twilio/voice` only answers requests with a valid `X-Twilio-Signature` (HMAC-SHA1 with `TWILIO_AUTH_TOKEN`) |
+| Dograh | `/api/dograh/webhook` and `/api/dograh/tools/*` need `DOGRAH_WEBHOOK_SECRET`; transcripts are fetched only from Dograh's own hosts (no requests to arbitrary URLs) |
 | Webhooks | `/api/vapi/webhook` needs `VAPI_WEBHOOK_SECRET` (Bearer token, compared in constant time), 1 MB body limit. `/api/dialer/tick` needs `CRON_SECRET` |
 | Keys | Twilio Account SID / Auth Token stay in your local `.env` and are sent only to Twilio and to Vapi (which needs them to use the number). `VAPI_API_KEY`, database URL and secrets exist only in server environment variables; nothing secret is stored in the database or sent to the browser (the Vapi *public* key can only start web calls) |
+| Code | No browser source maps; private pages and API answers are sent with `Cache-Control: no-store`; tampered form ids are rejected |
 | Browser | CSP (Vapi/Daily allowed only on the test-call page), HSTS, X-Frame-Options DENY, nosniff, strict referrer, microphone only on the test-call page, CSRF origin check on API routes and server actions |
 | Database | Supabase RLS on every table and no access for the public `anon` / `authenticated` roles (`prisma/rls.sql`); the app connects as the owner through Prisma |
 | SEO vs privacy | Only the landing page is indexed. `/app`, `/login`, `/setup-mfa` and `/api` send `X-Robots-Tag: noindex` and are disallowed in robots.txt |

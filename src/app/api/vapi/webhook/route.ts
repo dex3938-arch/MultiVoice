@@ -1,5 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { ensureCall, onEndOfCall, onStatusUpdate, runTool } from "@/lib/calls";
+import { badSecret, blocked, requestIp } from "@/lib/rate-limit";
+import { ensureCall, fromVapi, onEndOfCall, onStatusUpdate, runTool } from "@/lib/calls";
+import { readReport } from "@/lib/call-logic";
+import { recordSuccess } from "@/lib/providers/state";
 import { getSettings } from "@/lib/settings";
 import { webhookAuthorized, type VapiCall } from "@/lib/vapi";
 
@@ -15,7 +18,12 @@ const MAX_BYTES = 1_000_000;
 type ToolCall = { id?: string; type?: string; function?: { name?: string; arguments?: unknown }; name?: string; arguments?: unknown };
 
 export async function POST(req: NextRequest) {
-  if (!webhookAuthorized(req.headers)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const ip = requestIp(req.headers);
+  if (blocked(ip)) return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  if (!webhookAuthorized(req.headers)) {
+    badSecret(ip);
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
   const length = Number(req.headers.get("content-length") ?? 0);
   if (length > MAX_BYTES) return NextResponse.json({ error: "Too large" }, { status: 413 });
   const raw = await req.text();
@@ -28,7 +36,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Bad JSON" }, { status: 400 });
   }
   const message = body.message;
-  const call = (message?.call ?? {}) as VapiCall;
+  const call = fromVapi((message?.call ?? {}) as VapiCall);
   if (!message?.type) return NextResponse.json({ ok: true });
 
   try {
@@ -42,10 +50,11 @@ export async function POST(req: NextRequest) {
           : NextResponse.json({ error: "No assistant configured. Please call again later." });
       }
       case "status-update":
+        if (message.status === "in-progress") await recordSuccess("vapi");
         await onStatusUpdate(call, String(message.status ?? ""));
         return NextResponse.json({ ok: true });
       case "end-of-call-report":
-        await onEndOfCall(call, message);
+        await onEndOfCall(call, readReport(message));
         return NextResponse.json({ ok: true });
       case "tool-calls": {
         const list = ((message.toolCallList ?? message.toolCalls ?? []) as ToolCall[]).slice(0, 10);

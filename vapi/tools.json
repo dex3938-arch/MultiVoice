@@ -3,7 +3,7 @@
     "type": "function",
     "function": {
       "name": "search_knowledge",
-      "description": "Look up information in the knowledge base on ANY question asked by the caller, including technical concepts (such as Java, OOPs, Spring Boot, Collection Framework), company services, products, FAQs, pricing, policies, and hours. Use before answering any factual or technical question.",
+      "description": "Search the uploaded documents (FAQs, PDFs, policies, product and technical guides). Call it for EVERY question before answering, then answer in one or two sentences from the passages.",
       "parameters": { "type": "object", "properties": { "question": { "type": "string", "description": "The caller's question in a few words" } }, "required": ["question"] }
     }
   },

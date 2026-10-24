@@ -74,7 +74,7 @@ export default async function CallsPage({ searchParams }: { searchParams: Promis
             </ul>
             <div className="hidden overflow-x-auto md:block">
               <table className="table">
-                <thead><tr><th>Contact</th><th>Type</th><th>When</th><th>Length</th><th>Result</th><th>Summary</th><th>Cost</th></tr></thead>
+                <thead><tr><th>Contact</th><th>Type</th><th>Via</th><th>When</th><th>Length</th><th>Result</th><th>Summary</th><th>Cost</th></tr></thead>
                 <tbody>
                   {calls.map((c) => (
                     <tr key={c.id}>
@@ -88,6 +88,7 @@ export default async function CallsPage({ searchParams }: { searchParams: Promis
                         </Link>
                       </td>
                       <td><Badge tone={c.direction === "INBOUND" ? "sky" : c.direction === "OUTBOUND" ? "blue" : "grey"}>{DIRECTION[c.direction]}</Badge></td>
+                      <td><Badge tone={c.provider === "dograh" ? "violet" : "blue"}>{c.provider === "dograh" ? "Dograh" : "Vapi"}</Badge></td>
                       <td className="whitespace-nowrap text-sm">{formatDateTime(c.startedAt, s.timezone)}</td>
                       <td className="digits text-sm">{duration(c.durationSec)}</td>
                       <td><OutcomeBadge outcome={c.outcome} status={c.status} /></td>

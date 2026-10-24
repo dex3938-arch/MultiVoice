@@ -125,6 +125,7 @@ async function main() {
       .replace(/^AUTH_SECRET=.*$/m, `AUTH_SECRET="${secret()}"`)
       .replace(/^VAPI_WEBHOOK_SECRET=.*$/m, `VAPI_WEBHOOK_SECRET="${secret()}"`)
       .replace(/^CRON_SECRET=.*$/m, `CRON_SECRET="${secret(24)}"`)
+      .replace(/^DOGRAH_WEBHOOK_SECRET=.*$/m, `DOGRAH_WEBHOOK_SECRET="${secret()}"`)
       .replace(/^SEED_ADMIN_NAME=.*$/m, `SEED_ADMIN_NAME="${adminName.replace(/"/g, "")}"`)
       .replace(/^SEED_ADMIN_EMAIL=.*$/m, `SEED_ADMIN_EMAIL="${adminEmail}"`)
       .replace(/^SEED_ADMIN_PASSWORD=.*$/m, `SEED_ADMIN_PASSWORD="${adminPassword}"`);
@@ -156,7 +157,7 @@ async function main() {
     console.log(yellow("Save it in a password manager. It is also in .env as SEED_ADMIN_PASSWORD."));
   } else console.log("Password:                  SEED_ADMIN_PASSWORD in .env");
   console.log(`\nFor Vercel, copy these from .env into Project → Settings → Environment Variables:`);
-  console.log("  DATABASE_URL, DIRECT_URL, AUTH_SECRET, VAPI_WEBHOOK_SECRET, CRON_SECRET, APP_URL");
+  console.log("  DATABASE_URL, DIRECT_URL, AUTH_SECRET, VAPI_WEBHOOK_SECRET, DOGRAH_WEBHOOK_SECRET, CRON_SECRET, APP_URL");
   console.log("  + VAPI_API_KEY and NEXT_PUBLIC_VAPI_PUBLIC_KEY from the Vapi dashboard (see docs/VAPI-SETUP.md)\n");
 }
 

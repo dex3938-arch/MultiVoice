@@ -25,6 +25,7 @@ export default async function CallPage({ params }: { params: Promise<{ id: strin
   const live = !call.endedAt;
   const facts: [string, React.ReactNode][] = [
     ["Type", DIRECTION[call.direction]],
+    ["Voice provider", call.provider === "dograh" ? "Dograh" : "Vapi"],
     ["Started", formatDateTime(call.startedAt, s.timezone)],
     ["Length", duration(call.durationSec)],
     ["From", call.fromNumber ? formatPhone(call.fromNumber) : "—"],
@@ -75,10 +76,10 @@ export default async function CallPage({ params }: { params: Promise<{ id: strin
               </ul>
             )}
           </Card>
-          {(call.recordingUrl || call.vapiCallId) && (
+          {call.recordingUrl && (
             <Card>
               <CardHeader title="Recording" icon={AudioLines} />
-              <audio controls preload="none" src={`/api/calls/${call.id}/recording`} className="w-full" />
+              <audio controls preload="none" src={call.recordingUrl} className="w-full" />
             </Card>
           )}
           <Card>

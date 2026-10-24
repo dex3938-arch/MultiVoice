@@ -28,12 +28,20 @@ const common = [
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "X-DNS-Prefetch-Control", value: "off" },
+  { key: "X-Permitted-Cross-Domain-Policies", value: "none" },
+  { key: "Origin-Agent-Cluster", value: "?1" },
 ];
+
+// Private pages and API answers are never stored by browsers or shared caches.
+const noStore = [{ key: "Cache-Control", value: "private, no-store, max-age=0" }];
 
 const noindex = [{ key: "X-Robots-Tag", value: "noindex, nofollow" }];
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // No source maps in the browser: the app's code and logic are not published.
+  productionBrowserSourceMaps: false,
   compress: true,
   experimental: { serverActions: { bodySizeLimit: "5mb" }, optimizePackageImports: ["lucide-react"] },
   async headers() {
@@ -42,12 +50,12 @@ const nextConfig: NextConfig = {
       { source: "/:path*", headers: [...common, { key: "Content-Security-Policy", value: csp(false) }, { key: "Permissions-Policy", value: "camera=(), geolocation=(), microphone=()" }] },
       { source: "/app/test-call", headers: [{ key: "Content-Security-Policy", value: csp(true) }, { key: "Permissions-Policy", value: "camera=(), geolocation=(), microphone=(self)" }] },
       // The public landing page is indexed; the portal, sign-in and API never are.
-      { source: "/app/:path*", headers: noindex },
-      { source: "/app", headers: noindex },
+      { source: "/app/:path*", headers: [...noindex, ...noStore] },
+      { source: "/app", headers: [...noindex, ...noStore] },
       { source: "/login/:path*", headers: noindex },
       { source: "/login", headers: noindex },
       { source: "/setup-mfa", headers: noindex },
-      { source: "/api/:path*", headers: noindex },
+      { source: "/api/:path*", headers: [...noindex, ...noStore] },
     ];
   },
 };

@@ -137,8 +137,10 @@ model Call {
   direction    Direction
   contactId    Int?
   contact      Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  /// Vapi call id — matches webhooks to this row.
-  vapiCallId   String?      @unique @db.VarChar(80)
+  /// Which voice provider handled the call: vapi | dograh.
+  provider     String       @default("vapi") @db.VarChar(12)
+  /// The provider's call id (Vapi call id, or "dograh:<run id>") — matches webhooks to this row.
+  externalId   String?      @unique @map("vapiCallId") @db.VarChar(80)
   fromNumber   String?      @db.VarChar(20)
   toNumber     String?      @db.VarChar(20)
   /// Vapi status: queued, ringing, in-progress, forwarding, ended.
@@ -162,6 +164,7 @@ model Call {
   @@index([startedAt])
   @@index([outcome])
   @@index([status])
+  @@index([endedAt])
 }
 
 model CallMessage {
@@ -225,6 +228,9 @@ model KnowledgeDocument {
   category     String           @db.VarChar(40)
   status       DocStatus        @default(ACTIVE)
   fileName     String?          @db.VarChar(200)
+  /// Pages (PDF) and characters read, shown in the knowledge list.
+  pages        Int?
+  chars        Int?
   uploadedById Int?
   uploadedBy   User?            @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
   createdAt    DateTime         @default(now())
@@ -261,4 +267,28 @@ model Settings {
   monthlyBudgetUsd Int     @default(100)
   /// Promise in follow-ups: "our team will get back within … hours".
   followUpHours    Int     @default(24)
+
+  /// Voice providers, tried in this order (comma list of vapi, dograh). The next one takes over when one fails.
+  providerOrder    String  @default("vapi,dograh") @db.VarChar(40)
+  /// Twilio → this app → the first healthy provider for inbound calls (Twilio Voice URL = /api/twilio/voice).
+  inboundRouter    Boolean @default(true)
+  /// Vapi's Twilio inbound URL (saved by npm run vapi:setup after it imports the number).
+  vapiInboundUrl   String? @db.VarChar(300)
+  /// Dograh agent (workflow) UUID used for outbound calls.
+  dograhAgentUuid  String? @db.VarChar(80)
+  dograhBaseUrl    String  @default("https://app.dograh.com") @db.VarChar(200)
+  dograhInboundUrl String  @default("https://api.dograh.com/api/v1/telephony/inbound/run") @db.VarChar(300)
+  dograhTelephonyConfigId Int?
+  dograhFromNumberId      Int?
+}
+
+/// Health of each voice provider: a provider that ran out of credits (or is down) rests until cooldownUntil.
+model ProviderState {
+  id            String    @id @db.VarChar(12)
+  cooldownUntil DateTime?
+  lastError     String?   @db.VarChar(300)
+  lastErrorKind String?   @db.VarChar(12)
+  lastErrorAt   DateTime?
+  lastOkAt      DateTime?
+  failures      Int       @default(0)
 }

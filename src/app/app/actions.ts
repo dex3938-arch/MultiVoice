@@ -12,10 +12,11 @@ import { SESSION_COOKIE, sessionCookieOptions, signSession } from "@/lib/auth/se
 import { decryptSecret, hashRecovery, newRecoveryCodes, verifyCode } from "@/lib/auth/totp";
 import { prisma } from "@/lib/db";
 import { dialContact, runDialer } from "@/lib/dialer";
-import { ingestFile, ingestText, invalidateKnowledge } from "@/lib/knowledge/search";
-import { parseCsv } from "@/lib/knowledge/loaders";
+import { KNOWLEDGE_MIN_CONFIDENCE, answerText, ingestFile, ingestText, invalidateKnowledge, searchKnowledge } from "@/lib/knowledge/search";
+import { cleanPdfPages, parseCsv } from "@/lib/knowledge/loaders";
 import { toE164 } from "@/lib/phone";
 import { ADMINS, MANAGERS, ROLES, TEAM, type RoleValue } from "@/lib/roles";
+import { clearRest } from "@/lib/providers/state";
 import { getSettings } from "@/lib/settings";
 
 export type ActionState = { ok?: string; error?: string; at?: number } | undefined;
@@ -23,7 +24,12 @@ export type ActionState = { ok?: string; error?: string; at?: number } | undefin
 const ok = (msg: string): ActionState => ({ ok: msg, at: Date.now() });
 const fail = (msg: string): ActionState => ({ error: msg, at: Date.now() });
 const str = (fd: FormData, k: string, max = 500) => String(fd.get(k) ?? "").trim().slice(0, max);
-const num = (fd: FormData, k: string) => Number(str(fd, k));
+/** A record id from a form: a positive whole number, or the action stops (tampered forms do nothing). */
+const idOf = (fd: FormData, k = "id") => {
+  const n = Number(str(fd, k, 12));
+  if (!Number.isSafeInteger(n) || n <= 0) throw new Error("Invalid id");
+  return n;
+};
 const tags = (s: string) => [...new Set(s.split(",").map((t) => t.trim().toLowerCase().slice(0, 30)).filter(Boolean))].slice(0, 10);
 
 // --- Contacts ---------------------------------------------------------------------
@@ -104,7 +110,7 @@ export async function importContacts(_p: ActionState, fd: FormData): Promise<Act
 
 export async function updateContact(_p: ActionState, fd: FormData): Promise<ActionState> {
   const user = await requireUser(TEAM);
-  const id = num(fd, "id");
+  const id = idOf(fd);
   const status = STATUSES.find((x) => x === str(fd, "status"));
   if (!status) return fail("Choose a valid status.");
   const mail = str(fd, "email", 160);
@@ -136,7 +142,7 @@ export async function updateContact(_p: ActionState, fd: FormData): Promise<Acti
 
 export async function deleteContact(fd: FormData) {
   const user = await requireUser(MANAGERS);
-  const id = num(fd, "id");
+  const id = idOf(fd);
   await prisma.contact.delete({ where: { id } });
   await audit(user.id, "contact.delete", "Contact", id);
   revalidatePath("/app/contacts");
@@ -146,16 +152,18 @@ export async function deleteContact(fd: FormData) {
 /** "Call now": dials this contact straight away through Vapi (Do-Not-Call still applies). */
 export async function callNow(_p: ActionState, fd: FormData): Promise<ActionState> {
   const user = await requireUser(TEAM);
-  const id = num(fd, "id");
+  const id = idOf(fd);
+  let via = "";
   try {
-    await dialContact(id, { manual: true });
+    const r = await dialContact(id, { manual: true });
+    via = `${r.provider === "dograh" ? "Dograh" : "Vapi"}${r.failedOver ? " (the first provider failed, so the backup took over)" : ""}`;
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Could not start the call.");
   }
-  await audit(user.id, "contact.call_now", "Contact", id);
+  await audit(user.id, "contact.call_now", "Contact", id, { via });
   revalidatePath("/app/calls");
   revalidatePath(`/app/contacts/${id}`);
-  return ok("Calling… the phone rings in a few seconds.");
+  return ok(`Calling via ${via}… the phone rings in a few seconds.`);
 }
 
 // --- Campaign / dialer --------------------------------------------------------------
@@ -190,12 +198,13 @@ export async function setOutbound(fd: FormData) {
 
 export async function updateTask(_p: ActionState, fd: FormData): Promise<ActionState> {
   const user = await requireUser(TEAM);
-  const id = num(fd, "id");
+  const id = idOf(fd);
   const status = z.enum(["OPEN", "IN_PROGRESS", "DONE"]).safeParse(str(fd, "status"));
   if (!status.success) return fail("Choose a valid status.");
   const resolution = str(fd, "resolution", 5000);
   if (status.data === "DONE" && !resolution) return fail("Write what the customer was told before closing.");
-  const assignee = str(fd, "assigneeId");
+  const assignee = str(fd, "assigneeId", 12);
+  if (assignee && !/^\d+$/.test(assignee)) return fail("Choose a valid team member.");
   const task = await prisma.task.update({
     where: { id },
     data: { status: status.data, resolution: resolution || null, doneAt: status.data === "DONE" ? new Date() : null, assigneeId: assignee ? Number(assignee) : null },
@@ -213,7 +222,7 @@ export async function updateTask(_p: ActionState, fd: FormData): Promise<ActionS
 
 export async function setAppointmentStatus(fd: FormData) {
   const user = await requireUser(TEAM);
-  const id = num(fd, "id");
+  const id = idOf(fd);
   const status = z.enum(["BOOKED", "DONE", "CANCELLED"]).safeParse(str(fd, "status"));
   if (!status.success) return;
   await prisma.appointment.update({ where: { id }, data: { status: status.data } });
@@ -240,15 +249,61 @@ export async function uploadKnowledge(_p: ActionState, fd: FormData): Promise<Ac
     } else return fail("Choose a file or paste some text.");
     await audit(user.id, "knowledge.add", "KnowledgeDocument", doc.id);
     revalidatePath("/app/knowledge");
-    return ok(`Added "${doc.title}" (${doc._count.chunks} passages). Calls use it within a minute.`);
+    return ok(`Added "${doc.title}"${doc.pages ? `: ${doc.pages} pages` : ""} → ${doc._count.chunks} passages. Calls use it within seconds.`);
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Could not read this file.");
   }
 }
 
+export type KnowledgeTestResult = { found: boolean; ms: number; passages: { title: string; question: string | null; text: string; confidence: number }[] };
+
+/** Knowledge page: run the agent's search for a question. */
+export async function testKnowledge(question: string): Promise<KnowledgeTestResult> {
+  await requireUser();
+  const t = Date.now();
+  const hits = await searchKnowledge(String(question).slice(0, 300), 3);
+  const good = hits.filter((h) => h.confidence >= KNOWLEDGE_MIN_CONFIDENCE);
+  return { found: good.length > 0, ms: Date.now() - t, passages: (good.length ? good : hits.slice(0, 1)).map((h) => ({ title: h.title, question: h.heading, text: answerText(h.text), confidence: h.confidence })) };
+}
+
+/** Big PDFs are read in the browser (no upload size limit); the pages' text comes here. */
+export async function uploadKnowledgePages(_p: ActionState, fd: FormData): Promise<ActionState> {
+  const user = await requireUser(MANAGERS);
+  const title = str(fd, "title", 200);
+  const category = str(fd, "category", 40) || "general";
+  const fileName = str(fd, "fileName", 200) || null;
+  if (!title) return fail("Give the document a title.");
+  let pages: string[];
+  try {
+    const parsed = JSON.parse(String(fd.get("pages") ?? "[]")) as unknown;
+    if (!Array.isArray(parsed) || !parsed.every((x) => typeof x === "string")) throw new Error();
+    pages = parsed.slice(0, 3000);
+  } catch {
+    return fail("Could not read the pages sent by the browser.");
+  }
+  try {
+    const text = cleanPdfPages(pages);
+    const doc = await ingestText({ title, category, text, fileName: fileName ?? undefined, userId: user.id, kind: "pdf", pages: pages.length });
+    await audit(user.id, "knowledge.add", "KnowledgeDocument", doc.id, { pages: pages.length, via: "browser" });
+    revalidatePath("/app/knowledge");
+    return ok(`Added "${doc.title}": ${pages.length} pages → ${doc._count.chunks} passages. Calls use it within seconds.`);
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Could not read this file.");
+  }
+}
+
+export async function deleteDocument(fd: FormData) {
+  const user = await requireUser(MANAGERS);
+  const id = idOf(fd);
+  await prisma.knowledgeDocument.delete({ where: { id } });
+  invalidateKnowledge();
+  await audit(user.id, "knowledge.delete", "KnowledgeDocument", id);
+  revalidatePath("/app/knowledge");
+}
+
 export async function setDocumentStatus(fd: FormData) {
   const user = await requireUser(MANAGERS);
-  const id = num(fd, "id");
+  const id = idOf(fd);
   const status = str(fd, "status") === "ARCHIVED" ? "ARCHIVED" : "ACTIVE";
   await prisma.knowledgeDocument.update({ where: { id }, data: { status } });
   invalidateKnowledge();
@@ -280,6 +335,13 @@ const SettingsInput = z.object({
   maxConcurrent: z.coerce.number().int().min(1).max(50),
   monthlyBudgetUsd: z.coerce.number().int().min(0).max(1_000_000),
   followUpHours: z.coerce.number().int().min(1).max(168),
+  providerOrder: z.enum(["vapi,dograh", "dograh,vapi", "vapi", "dograh"]),
+  vapiInboundUrl: z.string().trim().max(300).refine((u) => !u || /^https:\/\/[^\s]+$/.test(u), "Vapi inbound URL must start with https://"),
+  dograhAgentUuid: z.string().trim().max(80).regex(/^[A-Za-z0-9-]*$/, "Dograh agent UUID: letters, numbers and dashes only"),
+  dograhBaseUrl: z.string().trim().url().max(200).refine((u) => /^https:\/\//.test(u) || /^http:\/\/localhost/.test(u), "Dograh base URL must start with https://"),
+  dograhInboundUrl: z.string().trim().url().max(300).refine((u) => /^https:\/\//.test(u), "Dograh inbound URL must start with https://"),
+  dograhTelephonyConfigId: z.string().trim().regex(/^\d{0,9}$/, "Telephony configuration id: a number"),
+  dograhFromNumberId: z.string().trim().regex(/^\d{0,9}$/, "From-number id: a number"),
 });
 
 export async function saveSettings(_p: ActionState, fd: FormData): Promise<ActionState> {
@@ -289,11 +351,33 @@ export async function saveSettings(_p: ActionState, fd: FormData): Promise<Actio
   const d = parsed.data;
   await prisma.settings.update({
     where: { id: 1 },
-    data: { ...d, vapiAssistantId: d.vapiAssistantId || null, vapiPhoneNumbers: d.vapiPhoneNumbers.split(/[\s,]+/).filter(Boolean).join(",") || null, outboundEnabled: fd.get("outboundEnabled") === "on" },
+    data: {
+      ...d,
+      vapiAssistantId: d.vapiAssistantId || null,
+      vapiPhoneNumbers: d.vapiPhoneNumbers.split(/[\s,]+/).filter(Boolean).join(",") || null,
+      vapiInboundUrl: d.vapiInboundUrl || null,
+      dograhAgentUuid: d.dograhAgentUuid || null,
+      dograhBaseUrl: d.dograhBaseUrl.replace(/\/$/, ""),
+      dograhTelephonyConfigId: d.dograhTelephonyConfigId ? Number(d.dograhTelephonyConfigId) : null,
+      dograhFromNumberId: d.dograhFromNumberId ? Number(d.dograhFromNumberId) : null,
+      outboundEnabled: fd.get("outboundEnabled") === "on",
+      inboundRouter: fd.get("inboundRouter") === "on",
+    },
   });
   await audit(user.id, "settings.update");
   revalidatePath("/app/settings");
   return ok("Settings saved.");
+}
+
+/** "Use again": end a provider's rest early (after adding credits / fixing the key). */
+export async function useProviderAgain(fd: FormData) {
+  const user = await requireUser(MANAGERS);
+  const p = str(fd, "provider");
+  if (p !== "vapi" && p !== "dograh") return;
+  await clearRest(p);
+  await audit(user.id, "provider.reset", "Provider", p);
+  revalidatePath("/app/settings");
+  revalidatePath("/app/campaigns");
 }
 
 // --- Users ----------------------------------------------------------------------------
@@ -317,7 +401,7 @@ export async function createUser(_p: ActionState, fd: FormData): Promise<ActionS
 
 export async function setUserRole(fd: FormData) {
   const admin = await requireUser(ADMINS);
-  const id = num(fd, "id");
+  const id = idOf(fd);
   const role = ROLES.find((r) => r === str(fd, "role"));
   if (!role || id === admin.id) return;
   await prisma.user.update({ where: { id }, data: { role, sessionVersion: { increment: 1 } } });
@@ -327,7 +411,7 @@ export async function setUserRole(fd: FormData) {
 
 export async function toggleUser(fd: FormData) {
   const user = await requireUser(ADMINS);
-  const id = num(fd, "id");
+  const id = idOf(fd);
   if (id === user.id) return; // never lock yourself out
   const target = await prisma.user.findUniqueOrThrow({ where: { id } });
   await prisma.user.update({ where: { id }, data: { active: !target.active, sessionVersion: { increment: 1 } } });
@@ -338,7 +422,7 @@ export async function toggleUser(fd: FormData) {
 /** Super Admin: remove someone's authenticator (lost phone). They set it up again at next sign-in. */
 export async function resetUserMfa(fd: FormData) {
   const admin = await requireUser(ADMINS);
-  const id = num(fd, "id");
+  const id = idOf(fd);
   if (id === admin.id) return;
   await prisma.user.update({
     where: { id },

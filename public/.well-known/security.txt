@@ -1,0 +1,4 @@
+Contact: mailto:security@example.com
+Preferred-Languages: en, hi
+Expires: 2027-10-23T00:00:00.000Z
+# Replace the contact with your own address before going live.

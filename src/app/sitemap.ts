@@ -1,8 +1,8 @@
 import type { MetadataRoute } from "next";
+import { PAGES } from "@/lib/seo";
 import { siteUrl } from "@/lib/site";
 
-const site = siteUrl();
-
 export default function sitemap(): MetadataRoute.Sitemap {
-  return [{ url: `${site}/`, changeFrequency: "monthly", priority: 1 }];
+  const site = siteUrl();
+  return Object.values(PAGES).map((p) => ({ url: `${site}${p.path === "/" ? "/" : p.path}`, changeFrequency: "monthly", priority: p.priority, lastModified: new Date("2026-10-23") }));
 }

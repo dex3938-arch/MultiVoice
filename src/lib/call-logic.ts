@@ -36,7 +36,7 @@ export function outcomeFromEndedReason(reason: string | undefined | null): Outco
 export type ReportMessage = { role: "assistant" | "user" | "system" | "tool"; text: string; secondsFromStart?: number };
 
 /** Read an end-of-call-report defensively (Vapi has moved fields between versions). */
-export function readReport(message: Record<string, unknown>) {
+export function readReport(message: Record<string, unknown>): CallReport {
   const m = message as {
     endedReason?: string; summary?: string; recordingUrl?: string; transcript?: string; cost?: number;
     startedAt?: string; endedAt?: string; durationSeconds?: number;
@@ -74,6 +74,20 @@ export function readReport(message: Record<string, unknown>) {
     customerSpoke: messages.some((x) => x.role === "user" && x.text.length > 1),
   };
 }
+
+export type CallReport = {
+  endedReason: string | null;
+  summary: string | null;
+  recordingUrl: string | null;
+  costCents: number | null;
+  startedAt: Date | null;
+  endedAt: Date | null;
+  durationSec: number | null;
+  messages: ReportMessage[];
+  customerSpoke: boolean;
+  /** A result the provider already worked out (Dograh disposition). */
+  outcomeHint?: OutcomeValue | null;
+};
 
 const parseDate = (v: unknown) => {
   if (typeof v !== "string") return null;
@@ -153,4 +167,102 @@ export function checkWhen(when: Date, now: Date, maxDays = 60): string | null {
   if (when.getTime() < now.getTime() + 15 * 60_000) return "That time has already passed or is too soon. Ask the caller for a later time.";
   if (when.getTime() > now.getTime() + maxDays * 86_400_000) return `Only the next ${maxDays} days can be booked. Ask for a nearer date.`;
   return null;
+}
+
+// ---------------------------------------------------------------- Dograh (webhook node payload, see dograh/webhook-template.json)
+
+/** Template values Dograh could not fill come through as "", "None", "null" or "{{…}}". */
+export function clean(v: unknown, max = 4000): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s || /^(none|null|undefined|nan)$/i.test(s) || /^\{\{.*\}\}$/.test(s)) return null;
+  return s.slice(0, max);
+}
+
+/** Dograh call disposition → our outcome (only the ones that are clear). */
+export function outcomeFromDisposition(d: string | null): OutcomeValue | null {
+  const x = (d ?? "").toLowerCase().replace(/[\s_]+/g, "-");
+  if (!x) return null;
+  if (/do-?not-?call|dnc|unsubscribe/.test(x)) return "DNC";
+  if (/not-?interested|declined|rejected/.test(x)) return "NOT_INTERESTED";
+  if (/appointment|booked|meeting|demo-scheduled/.test(x)) return "APPOINTMENT_BOOKED";
+  if (/call-?back|callback|reschedule/.test(x)) return "CALLBACK";
+  if (/transfer/.test(x)) return "TRANSFERRED";
+  if (/interested|qualified|hot|warm/.test(x)) return "INTERESTED";
+  return outcomeFromEndedReason(x);
+}
+
+/** Transcript from Dograh: JSON list of turns, or "User: … / Agent: …" lines. */
+export function parseTranscript(raw: string): ReportMessage[] {
+  const out: ReportMessage[] = [];
+  const role = (r: string): ReportMessage["role"] | null =>
+    /^(user|customer|caller|human)$/i.test(r) ? "user" : /^(assistant|agent|bot|ai)$/i.test(r) ? "assistant" : null;
+  try {
+    const j = JSON.parse(raw) as unknown;
+    const list = Array.isArray(j) ? j : Array.isArray((j as { messages?: unknown[] })?.messages) ? (j as { messages: unknown[] }).messages : Array.isArray((j as { transcript?: unknown[] })?.transcript) ? (j as { transcript: unknown[] }).transcript : null;
+    if (list) {
+      for (const t of list as { role?: string; speaker?: string; content?: string; text?: string; message?: string; timestamp?: number }[]) {
+        const r = role(String(t.role ?? t.speaker ?? ""));
+        const text = String(t.content ?? t.text ?? t.message ?? "").trim();
+        if (r && text) out.push({ role: r, text: text.slice(0, 4000) });
+      }
+      return out;
+    }
+  } catch {
+    /* plain text */
+  }
+  for (const line of raw.split(/\r?\n/)) {
+    const m = line.match(/^\s*\[?[\d:.\s-]*\]?\s*(user|customer|caller|assistant|agent|bot|ai)\s*[:\-]\s*(.+)$/i);
+    const r = m && role(m[1]);
+    if (r && m) out.push({ role: r, text: m[2].trim().slice(0, 4000) });
+  }
+  return out;
+}
+
+export type DograhEvent = {
+  runId: string | null;
+  direction: "INBOUND" | "OUTBOUND" | null;
+  phone: string | null;
+  transcriptUrl: string | null;
+  report: CallReport;
+};
+
+export function readDograhPayload(body: Record<string, unknown>): DograhEvent {
+  const get = (...keys: string[]) => {
+    for (const k of keys) {
+      const v = clean(body[k]);
+      if (v) return v;
+    }
+    return null;
+  };
+  const runId = get("run_id", "workflow_run_id");
+  const dir = (get("direction") ?? "").toLowerCase();
+  const disposition = get("disposition", "call_disposition", "mapped_disposition", "call_status");
+  const duration = Number(get("duration", "call_duration_seconds"));
+  const ended = parseDate(get("ended_at"));
+  const started = parseDate(get("call_time", "started_at")) ?? (ended && Number.isFinite(duration) ? new Date(ended.getTime() - duration * 1000) : null);
+  const transcriptText = get("transcript");
+  const messages = transcriptText ? parseTranscript(transcriptText) : [];
+  const recording = get("recording_url", "recording");
+  const cost = Number(get("cost_usd", "cost"));
+  const hint = outcomeFromDisposition(disposition);
+  const spoke = messages.some((m) => m.role === "user") || (Number.isFinite(duration) && duration >= 15 && hint !== "NO_ANSWER" && hint !== "BUSY" && hint !== "VOICEMAIL");
+  return {
+    runId: runId && /^[\w-]{1,60}$/.test(runId) ? runId : null,
+    direction: dir.startsWith("in") ? "INBOUND" : dir.startsWith("out") ? "OUTBOUND" : null,
+    phone: get("phone", "phone_number", "caller_number", "customer_number"),
+    transcriptUrl: get("transcript_url"),
+    report: {
+      endedReason: disposition ? `dograh:${disposition.slice(0, 70)}` : null,
+      summary: get("summary", "outcome"),
+      recordingUrl: recording && /^https:\/\//.test(recording) ? recording.slice(0, 600) : null,
+      costCents: Number.isFinite(cost) && cost > 0 ? Math.round(cost * 100) : null,
+      startedAt: started,
+      endedAt: ended,
+      durationSec: Number.isFinite(duration) && duration >= 0 ? Math.round(duration) : null,
+      messages,
+      customerSpoke: spoke,
+      outcomeHint: hint,
+    },
+  };
 }
