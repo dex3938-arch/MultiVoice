@@ -19,18 +19,18 @@ export async function GET(
 
   const call = await prisma.call.findUnique({
     where: { id: callId },
-    select: { vapiCallId: true, recordingUrl: true },
+    select: { externalId: true, provider: true, recordingUrl: true },
   });
 
-  if (!call || (!call.vapiCallId && !call.recordingUrl)) {
+  if (!call || (!call.externalId && !call.recordingUrl)) {
     return NextResponse.json({ error: "Recording not found" }, { status: 404 });
   }
 
   const vapiKey = process.env.VAPI_API_KEY;
-  if (call.vapiCallId && vapiKey) {
+  if (call.provider === "vapi" && call.externalId && vapiKey) {
     try {
       const vapiRes = await fetch(
-        `https://api.vapi.ai/call/${call.vapiCallId}/mono-recording`,
+        `https://api.vapi.ai/call/${call.externalId}/mono-recording`,
         {
           headers: { Authorization: `Bearer ${vapiKey}` },
           redirect: "manual",
