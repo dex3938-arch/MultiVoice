@@ -16,10 +16,14 @@ type Item = { href: string; label: string; icon: LucideIcon; exact?: boolean; ba
 export function Nav({ canManage, isAdmin, openTasks, user, footer }: { canManage: boolean; isAdmin: boolean; openTasks: number; user: { name: string; role: string }; footer: React.ReactNode }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  useEffect(() => setOpen(false), [pathname]);
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
-    return () => { document.body.style.overflow = ""; };
+    return () => {
+      document.body.style.overflow = "";
+    };
   }, [open]);
 
   const groups: { title: string; items: Item[] }[] = [

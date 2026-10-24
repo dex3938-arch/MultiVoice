@@ -22,13 +22,19 @@ export function TestCall({ publicKey, assistantId, variables }: { publicKey: str
   const [seconds, setSeconds] = useState(0);
   const box = useRef<HTMLOListElement>(null);
 
-  useEffect(() => () => void vapi.current?.stop(), []);
+  useEffect(() => {
+    return () => {
+      vapi.current?.stop();
+    };
+  }, []);
   useEffect(() => {
     if (state !== "live") return;
     const id = window.setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => window.clearInterval(id);
   }, [state]);
-  useEffect(() => box.current?.scrollTo({ top: box.current.scrollHeight, behavior: "smooth" }), [lines]);
+  useEffect(() => {
+    box.current?.scrollTo({ top: box.current.scrollHeight, behavior: "smooth" });
+  }, [lines]);
 
   async function start() {
     setError("");
